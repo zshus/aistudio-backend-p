@@ -1,0 +1,8 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pymilvus==2.4.9
+sentence-transformers==3.1.1
+pypdf==4.3.1
+python-docx==1.1.2
+python-multipart==0.0.12
+pydantic-settings==2.5.2
