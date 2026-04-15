@@ -20,10 +20,16 @@ class DeleteResponse(BaseModel):
     message: str
 
 
+class CollectionDeleteResponse(BaseModel):
+    folder_id: int
+    deleted: bool
+    message: str
+
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
-    folder_id: Optional[int] = None
+    folder_id: int
 
 
 class SearchResult(BaseModel):

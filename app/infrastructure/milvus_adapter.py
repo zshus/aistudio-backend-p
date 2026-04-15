@@ -9,7 +9,6 @@ from pymilvus import (
 from app.config import settings
 
 
-COLLECTION_NAME = settings.collection_name
 DIM = settings.embedding_dim
 
 
@@ -17,9 +16,15 @@ def connect():
     connections.connect(host=settings.milvus_host, port=settings.milvus_port)
 
 
-def ensure_collection() -> Collection:
-    if utility.has_collection(COLLECTION_NAME):
-        return Collection(COLLECTION_NAME)
+def collection_name(folder_id: int) -> str:
+    return f"_{folder_id}"
+
+
+def ensure_collection(col_name: str) -> Collection:
+    if utility.has_collection(col_name):
+        col = Collection(col_name)
+        col.load()
+        return col
 
     fields = [
         FieldSchema("id",          DataType.INT64,        is_primary=True, auto_id=True),
@@ -31,14 +36,21 @@ def ensure_collection() -> Collection:
         FieldSchema("embedding",   DataType.FLOAT_VECTOR, dim=DIM),
     ]
     schema = CollectionSchema(fields, description="Document vector store")
-    collection = Collection(COLLECTION_NAME, schema)
+    col = Collection(col_name, schema)
 
-    collection.create_index(
+    col.create_index(
         field_name="embedding",
         index_params={"index_type": "IVF_FLAT", "metric_type": "COSINE", "params": {"nlist": 128}},
     )
-    collection.load()
-    return collection
+    col.load()
+    return col
+
+
+def drop_collection(col_name: str) -> bool:
+    if utility.has_collection(col_name):
+        utility.drop_collection(col_name)
+        return True
+    return False
 
 
 def insert_chunks(
@@ -48,7 +60,7 @@ def insert_chunks(
     chunks: list[str],
     embeddings: list[list[float]],
 ) -> int:
-    collection = ensure_collection()
+    col = ensure_collection(collection_name(folder_id))
     data = [
         [file_id] * len(chunks),
         [file_name] * len(chunks),
@@ -57,33 +69,35 @@ def insert_chunks(
         list(range(len(chunks))),
         embeddings,
     ]
-    result = collection.insert(data)
-    collection.flush()
+    result = col.insert(data)
+    col.flush()
     return len(result.primary_keys)
 
 
-def delete_by_file_id(file_id: int) -> int:
-    collection = ensure_collection()
-    result = collection.delete(f"file_id == {file_id}")
-    collection.flush()
+def delete_by_file_id(file_id: int, folder_id: int) -> int:
+    col_name = collection_name(folder_id)
+    if not utility.has_collection(col_name):
+        return 0
+    col = Collection(col_name)
+    col.load()
+    result = col.delete(f"file_id == {file_id}")
+    col.flush()
     return result.delete_count
 
 
 def search(
     query_embedding: list[float],
     top_k: int,
-    folder_id: int | None = None,
+    folder_id: int,
 ) -> list[dict]:
-    collection = ensure_collection()
+    col = ensure_collection(collection_name(folder_id))
 
-    expr = f"folder_id == {folder_id}" if folder_id is not None else None
-
-    results = collection.search(
+    results = col.search(
         data=[query_embedding],
         anns_field="embedding",
         param={"metric_type": "COSINE", "params": {"nprobe": 16}},
         limit=top_k,
-        expr=expr,
+        expr=f"folder_id == {folder_id}",
         output_fields=["file_id", "file_name", "folder_id", "chunk_text", "chunk_index"],
     )
 
