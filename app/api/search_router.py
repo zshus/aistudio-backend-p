@@ -13,6 +13,6 @@ def search(req: SearchRequest):
     results = search_service.similarity_search(
         query=req.query,
         top_k=req.top_k,
-        folder_id=req.folder_id,
+        folder_ids=req.folder_ids,
     )
     return SearchResponse(query=req.query, results=results)

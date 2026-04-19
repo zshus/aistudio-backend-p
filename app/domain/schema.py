@@ -29,7 +29,7 @@ class CollectionDeleteResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
-    folder_id: int
+    folder_ids: list[int]  # useYn=true 폴더 id 리스트 (backend-j에서 필터링 후 전달)
 
 
 class SearchResult(BaseModel):

@@ -6,10 +6,15 @@ from app.domain.schema import SearchResult
 def similarity_search(
     query: str,
     top_k: int,
-    folder_id: int,
+    folder_ids: list[int],
 ) -> list[SearchResult]:
     query_embedding = embedder.encode_one(query)
-    hits = milvus_adapter.search(query_embedding, top_k, folder_id)
+
+    # 폴더별 검색 후 결과 합산
+    all_hits = milvus_adapter.search_multiple(query_embedding, top_k, folder_ids)
+
+    # score 내림차순 정렬
+    all_hits.sort(key=lambda h: h["score"], reverse=True)
 
     return [
         SearchResult(
@@ -20,5 +25,5 @@ def similarity_search(
             chunk_index=h["chunk_index"],
             score=h["score"],
         )
-        for h in hits
+        for h in all_hits
     ]

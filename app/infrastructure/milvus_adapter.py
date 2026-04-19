@@ -90,8 +90,11 @@ def search(
     top_k: int,
     folder_id: int,
 ) -> list[dict]:
-    col = ensure_collection(collection_name(folder_id))
+    col_name = collection_name(folder_id)
+    if not utility.has_collection(col_name):
+        return []
 
+    col = ensure_collection(col_name)
     results = col.search(
         data=[query_embedding],
         anns_field="embedding",
@@ -112,3 +115,20 @@ def search(
             "score":       hit.score,
         })
     return hits
+
+
+def search_multiple(
+    query_embedding: list[float],
+    top_k: int,
+    folder_ids: list[int],
+) -> list[dict]:
+    """여러 폴더(컬렉션)를 순회하며 검색 후 결과를 합산하여 반환"""
+    all_hits = []
+    for folder_id in folder_ids:
+        try:
+            hits = search(query_embedding, top_k, folder_id)
+            all_hits.extend(hits)
+        except Exception as e:
+            # 특정 폴더 검색 실패 시 해당 폴더만 건너뜀
+            print(f"[WARN] folderId={folder_id} 검색 실패: {e}")
+    return all_hits
