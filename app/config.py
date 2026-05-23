@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 50
 
+    opensearch_host: str = "opensearch"
+    opensearch_port: int = 9200
+    opensearch_keyword_index: str = "routing_keywords"
+    routing_score_threshold: float = 0.4
+
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-sonnet-4-6"
+
     class Config:
         env_file = ".env"
 

@@ -117,6 +117,20 @@ def search(
     return hits
 
 
+def query_chunks_by_file_id(file_id: int, folder_id: int) -> list[dict]:
+    col_name = collection_name(folder_id)
+    if not utility.has_collection(col_name):
+        return []
+    col = Collection(col_name)
+    col.load()
+    results = col.query(
+        expr=f"file_id == {file_id}",
+        output_fields=["chunk_text", "chunk_index"],
+        limit=16384,
+    )
+    return sorted(results, key=lambda x: x["chunk_index"])
+
+
 def search_multiple(
     query_embedding: list[float],
     top_k: int,

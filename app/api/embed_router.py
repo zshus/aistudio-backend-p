@@ -1,14 +1,22 @@
 import logging
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Query
 from app.domain.schema import EmbedResponse, DeleteResponse, CollectionDeleteResponse
-from app.application import embed_service
+from app.application import embed_service, keyword_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/embed", tags=["embed"])
 
 
+def _background_extract_keywords(file_id: int, folder_id: int, file_name: str):
+    try:
+        keyword_service.extract_and_save(file_id=file_id, folder_id=folder_id, file_name=file_name)
+    except Exception as e:
+        logger.warning("백그라운드 키워드 추출 실패: file_id=%s, error=%s", file_id, e)
+
+
 @router.post("", response_model=EmbedResponse)
 async def embed(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     file_id: int = Form(...),
     file_name: str = Form(...),
@@ -26,6 +34,9 @@ async def embed(
         )
         logger.info("임베딩 완료: file_id=%s, chunks_inserted=%s, collection=_%s",
                     file_id, inserted, folder_id)
+        background_tasks.add_task(
+            _background_extract_keywords, file_id, folder_id, file_name
+        )
         return EmbedResponse(
             file_id=file_id,
             chunks_inserted=inserted,
@@ -52,6 +63,7 @@ def delete_collection(folder_id: int):
 @router.delete("/{file_id}", response_model=DeleteResponse)
 def delete_embed(file_id: int, folder_id: int = Query(...)):
     deleted = embed_service.delete_embeddings(file_id, folder_id)
+    keyword_service.delete_keywords(file_id)
     return DeleteResponse(
         file_id=file_id,
         deleted_count=deleted,

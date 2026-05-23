@@ -4,10 +4,26 @@ services:
     ports:
       - "8000:8000"
     environment:
-      MILVUS_HOST: localhost
+      MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     depends_on:
       - milvus
+      - opensearch
+
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearchdata:/usr/share/opensearch/data
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
@@ -54,3 +70,4 @@ volumes:
   etcddata:
   miniodata:
   milvusdata:
+  opensearchdata:
