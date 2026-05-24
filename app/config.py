@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     opensearch_keyword_index: str = "routing_keywords"
     routing_score_threshold: float = 0.4
 
-    anthropic_api_key: str = ""
-    llm_model: str = "claude-sonnet-4-6"
+    google_api_key: str = ""
+    llm_model: str = "gemini-2.5-flash"
 
     class Config:
         env_file = ".env"

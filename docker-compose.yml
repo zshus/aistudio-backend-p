@@ -1,6 +1,9 @@
+version: "3.9"
+
 services:
   backend-p:
     build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -8,7 +11,7 @@ services:
       MILVUS_PORT: "19530"
       OPENSEARCH_HOST: opensearch
       OPENSEARCH_PORT: "9200"
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
     depends_on:
       - milvus
       - opensearch
@@ -20,6 +23,7 @@ services:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - TZ=Asia/Seoul
     ports:
       - "9200:9200"
     volumes:
@@ -38,6 +42,8 @@ services:
       -advertise-client-urls=http://0.0.0.0:2379
       -listen-client-urls=http://0.0.0.0:2379
       -data-dir=/etcd
+    ports:
+      - "2379:2379"
     volumes:
       - etcddata:/etcd
 
@@ -48,6 +54,9 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
     command: minio server /minio_data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - miniodata:/minio_data
 
@@ -63,6 +72,7 @@ services:
     command: ["milvus", "run", "standalone"]
     ports:
       - "19530:19530"
+      - "9091:9091"
     volumes:
       - milvusdata:/var/lib/milvus
 

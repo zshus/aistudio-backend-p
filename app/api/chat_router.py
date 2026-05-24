@@ -26,12 +26,18 @@ def chat_query(req: ChatQueryRequest):
 
     history = [{"role": m.role, "content": m.content} for m in req.conversation_history]
 
+    import json as _json
+
     def event_stream():
-        yield from chat_service.stream_response(
-            query=req.query,
-            conversation_history=history,
-            folder_ids=req.folder_ids,
-            top_k=req.top_k,
-        )
+        try:
+            yield from chat_service.stream_response(
+                query=req.query,
+                conversation_history=history,
+                folder_ids=req.folder_ids,
+                top_k=req.top_k,
+            )
+        except Exception as e:
+            logger.error("event_stream 오류: %s", e, exc_info=True)
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

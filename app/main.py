@@ -10,13 +10,16 @@ from app.api.embed_router import router as embed_router
 from app.api.search_router import router as search_router
 from app.api.keywords_router import router as keywords_router
 from app.api.chat_router import router as chat_router
+from app.api.tools_router import router as tools_router
 from app.infrastructure import milvus_adapter, opensearch_adapter
+from app.infrastructure.embedder import embedder
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     milvus_adapter.connect()
     opensearch_adapter.ensure_index()
+    opensearch_adapter.seed_tools(embedder)
     yield
 
 
@@ -25,6 +28,7 @@ app.include_router(embed_router)
 app.include_router(search_router)
 app.include_router(keywords_router)
 app.include_router(chat_router)
+app.include_router(tools_router)
 
 
 @app.get("/health")
