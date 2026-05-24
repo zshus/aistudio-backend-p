@@ -48,6 +48,10 @@ _ROUTING_TOOL = types.Tool(function_declarations=[
         name="web_search",
         description="인터넷에서 최신 정보를 검색합니다. 실시간 정보·뉴스·외부 정보가 필요할 때 사용합니다.",
     ),
+    types.FunctionDeclaration(
+        name="list_capabilities",
+        description="시스템이 제공하는 기능 목록을 반환합니다. '뭘 할 수 있어', '기능이 뭐야', '어떤 기능 있어' 처럼 시스템 기능을 직접 물어볼 때 사용합니다.",
+    ),
 ])
 
 
@@ -208,7 +212,11 @@ def _extract_web_sources(chunk) -> list[dict]:
 
 
 def _tool_info() -> str:
-    lines = "\n".join(f"- {t['name']}: {t['description']}" for t in _TOOL_DEFINITIONS)
+    lines = "\n".join(
+        f"- {t['name']}: {t['description']}"
+        for t in _TOOL_DEFINITIONS
+        if not t.get("hidden")
+    )
     return f"사용 가능한 기능:\n{lines}"
 
 
@@ -225,12 +233,7 @@ def _build_system_prompt(tool_name: str, rag_context: str) -> str:
         )
     if tool_name == "web_search":
         return f"{base} 검색된 최신 정보를 바탕으로 정확하게 답변하세요."
-    return (
-        f"{base} 일반적인 지식으로 답변하세요.\n\n"
-        "아래 기능 정보는 사용자가 '뭘 할 수 있어', '기능이 뭐야' 처럼 "
-        "시스템 기능을 직접 물어볼 때만 참고하고, 그 외 질문에는 언급하지 마세요.\n"
-        f"{_tool_info()}"
-    )
+    return f"{base} 일반적인 지식으로 답변하세요."
 
 
 def stream_response(
@@ -255,6 +258,11 @@ def stream_response(
     yield f"data: {json.dumps({'type': 'llm_decision', 'tool': tool_name, 'selected_ids': selected_ids}, ensure_ascii=False)}\n\n"
 
     # 3. Tool 실행
+    if tool_name == "list_capabilities":
+        yield f"data: {json.dumps({'type': 'token', 'content': _tool_info()}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'sources': [], 'source_type': ''}, ensure_ascii=False)}\n\n"
+        return
+
     rag_context, sources, source_type = "", [], ""
     if tool_name == "rag_search":
         rag_context, sources = _execute_rag(candidates, selected_ids, query, top_k)

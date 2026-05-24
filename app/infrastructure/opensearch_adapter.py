@@ -170,6 +170,14 @@ _TOOL_DEFINITIONS = [
         "description": "인터넷에서 최신 정보를 검색하여 답변",
         "keywords":    ["날씨", "뉴스", "최신", "실시간", "지금", "오늘", "현재", "주가", "환율", "인터넷", "최근"],
     },
+    {
+        "target_id":   "list_capabilities",
+        "target_type": "tool",
+        "name":        "기능 목록",
+        "description": "시스템이 제공하는 기능 목록을 안내",
+        "keywords":    ["기능", "할 수 있어", "뭘 할", "도움말", "사용법", "소개", "능력", "어떤 기능", "무슨 기능", "뭐 할 수"],
+        "hidden":      True,
+    },
 ]
 
 
