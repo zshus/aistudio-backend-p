@@ -89,10 +89,17 @@ def search(
     query_embedding: list[float],
     top_k: int,
     folder_id: int,
+    file_ids: list[int] | None = None,
 ) -> list[dict]:
     col_name = collection_name(folder_id)
     if not utility.has_collection(col_name):
         return []
+
+    expr = f"folder_id == {folder_id}"
+    if file_ids is not None:
+        if not file_ids:
+            return []
+        expr += f" and file_id in {file_ids}"
 
     col = ensure_collection(col_name)
     results = col.search(
@@ -100,7 +107,7 @@ def search(
         anns_field="embedding",
         param={"metric_type": "COSINE", "params": {"nprobe": 16}},
         limit=top_k,
-        expr=f"folder_id == {folder_id}",
+        expr=expr,
         output_fields=["file_id", "file_name", "folder_id", "chunk_text", "chunk_index"],
     )
 
@@ -143,6 +150,21 @@ def search_multiple(
             hits = search(query_embedding, top_k, folder_id)
             all_hits.extend(hits)
         except Exception as e:
-            # 특정 폴더 검색 실패 시 해당 폴더만 건너뜀
+            print(f"[WARN] folderId={folder_id} 검색 실패: {e}")
+    return all_hits
+
+
+def search_by_files(
+    query_embedding: list[float],
+    top_k: int,
+    folder_file_map: dict[int, list[int]],
+) -> list[dict]:
+    """폴더별 활성 file_id 목록으로 Milvus 검색 — OpenSearch 라우팅 결과 기반"""
+    all_hits = []
+    for folder_id, file_ids in folder_file_map.items():
+        try:
+            hits = search(query_embedding, top_k, folder_id, file_ids)
+            all_hits.extend(hits)
+        except Exception as e:
             print(f"[WARN] folderId={folder_id} 검색 실패: {e}")
     return all_hits

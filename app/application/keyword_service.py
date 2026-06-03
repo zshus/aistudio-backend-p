@@ -93,6 +93,18 @@ def save_keywords(file_id: int, folder_id: int, file_name: str, keywords: list[s
     return keywords
 
 
+def update_enabled_by_folder_id(folder_id: int, enabled: bool):
+    opensearch_adapter.update_enabled_by_folder_id(folder_id, enabled)
+
+
+def delete_by_folder_id(folder_id: int):
+    opensearch_adapter.delete_by_folder_id(folder_id)
+
+
+def update_enabled(file_id: int, enabled: bool):
+    opensearch_adapter.update_enabled(f"file_{file_id}", enabled)
+
+
 def delete_keywords(file_id: int):
     opensearch_adapter.delete(f"file_{file_id}")
 

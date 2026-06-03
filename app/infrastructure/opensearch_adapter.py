@@ -139,6 +139,70 @@ def hybrid_search(query_text: str, query_embedding: list[float], k: int = 10) ->
     return results
 
 
+def update_enabled_by_folder_id(folder_id: int, enabled: bool):
+    """폴더 문서 + 해당 폴더 소속 파일 문서의 enabled를 한 번에 업데이트"""
+    try:
+        client = _client()
+        client.update_by_query(
+            index=INDEX,
+            body={
+                "script": {
+                    "source": "ctx._source.enabled = params.enabled",
+                    "params": {"enabled": enabled},
+                },
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"folder_id": folder_id}},
+                            {"term": {"target_id": f"folder_{folder_id}"}},
+                        ]
+                    }
+                },
+            },
+            refresh=True,
+        )
+        logger.info("폴더 enabled 일괄 업데이트: folder_id=%s, enabled=%s", folder_id, enabled)
+    except Exception as e:
+        logger.error("폴더 enabled 업데이트 실패: folder_id=%s, error=%s", folder_id, e)
+
+
+def delete_by_folder_id(folder_id: int):
+    """폴더 문서 + 해당 폴더 소속 파일 문서를 한 번에 삭제"""
+    try:
+        client = _client()
+        client.delete_by_query(
+            index=INDEX,
+            body={
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"folder_id": folder_id}},
+                            {"term": {"target_id": f"folder_{folder_id}"}},
+                        ]
+                    }
+                }
+            },
+            refresh=True,
+        )
+        logger.info("폴더 관련 OpenSearch 문서 삭제: folder_id=%s", folder_id)
+    except Exception as e:
+        logger.error("폴더 OpenSearch 삭제 실패: folder_id=%s, error=%s", folder_id, e)
+
+
+def update_enabled(target_id: str, enabled: bool):
+    try:
+        client = _client()
+        client.update(
+            index=INDEX,
+            id=target_id,
+            body={"doc": {"enabled": enabled}},
+            refresh=True,
+        )
+        logger.info("enabled 업데이트: target_id=%s, enabled=%s", target_id, enabled)
+    except NotFoundError:
+        logger.warning("enabled 업데이트 대상 없음: target_id=%s", target_id)
+
+
 def get_keywords(target_id: str) -> list[str]:
     try:
         client = _client()

@@ -9,13 +9,24 @@ def similarity_search(
     folder_ids: list[int],
 ) -> list[SearchResult]:
     query_embedding = embedder.encode_one(query)
-
-    # 폴더별 검색 후 결과 합산
     all_hits = milvus_adapter.search_multiple(query_embedding, top_k, folder_ids)
-
-    # score 내림차순 정렬
     all_hits.sort(key=lambda h: h["score"], reverse=True)
+    return _to_results(all_hits)
 
+
+def similarity_search_by_files(
+    query: str,
+    top_k: int,
+    folder_file_map: dict[int, list[int]],
+) -> list[SearchResult]:
+    """OpenSearch가 선별한 folder→file_ids 기반으로 Milvus 검색"""
+    query_embedding = embedder.encode_one(query)
+    all_hits = milvus_adapter.search_by_files(query_embedding, top_k, folder_file_map)
+    all_hits.sort(key=lambda h: h["score"], reverse=True)
+    return _to_results(all_hits)
+
+
+def _to_results(hits: list[dict]) -> list[SearchResult]:
     return [
         SearchResult(
             file_id=h["file_id"],
@@ -25,5 +36,5 @@ def similarity_search(
             chunk_index=h["chunk_index"],
             score=h["score"],
         )
-        for h in all_hits
+        for h in hits
     ]

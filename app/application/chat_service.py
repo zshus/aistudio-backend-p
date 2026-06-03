@@ -1,5 +1,6 @@
 import json
 import logging
+from collections import defaultdict
 from typing import Generator
 
 import numpy as np
@@ -7,7 +8,7 @@ from google import genai
 from google.genai import types
 
 from app.application.routing_service import RouteCandidate, find_candidates
-from app.application.search_service import similarity_search
+from app.application.search_service import similarity_search_by_files
 from app.infrastructure.embedder import embedder
 from app.infrastructure.opensearch_adapter import _TOOL_DEFINITIONS
 from app.config import settings
@@ -32,17 +33,6 @@ _ROUTING_TOOL = types.Tool(function_declarations=[
     types.FunctionDeclaration(
         name="rag_search",
         description="관련 문서를 검색하여 답변합니다. 파일·폴더 내용에 대한 질문에 사용합니다.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "target_ids": types.Schema(
-                    type=types.Type.ARRAY,
-                    items=types.Schema(type=types.Type.STRING),
-                    description="검색할 후보의 target_id 목록",
-                ),
-            },
-            required=["target_ids"],
-        ),
     ),
     types.FunctionDeclaration(
         name="web_search",
@@ -120,21 +110,16 @@ def _filter_relevant_history(
     return result
 
 
-def _route_with_llm(candidates: list[RouteCandidate], query: str) -> tuple[str, list[str]]:
-    """LLM이 후보 목록을 보고 tool과 target_ids를 선택한다."""
-    candidate_section = ""
-    if candidates:
-        lines = "\n".join(
-            f"- target_id={c.target_id}, type={c.target_type}, name={c.name}, score={c.score:.3f}"
-            for c in candidates
-        )
-        candidate_section = f"라우팅 후보:\n{lines}\n\n"
+def _route_with_llm(candidates: list[RouteCandidate], query: str) -> str:
+    """LLM이 어떤 도구를 쓸지만 결정한다. 파일 선택은 OpenSearch 결과를 직접 사용."""
+    has_file_candidates = any(c.target_type == "file" for c in candidates)
+    candidate_section = f"관련 문서 후보 존재: {'예' if has_file_candidates else '아니오'}\n\n"
 
     prompt = (
         f"사용자 질문: {query}\n\n"
         f"{candidate_section}"
         "질문에 가장 적합한 tool을 선택하세요.\n"
-        "- 문서·파일 관련 질문이면 rag_search (파일·폴더 후보의 target_id만 선택)\n"
+        "- 문서·파일 관련 질문이면 rag_search\n"
         "- 최신 정보·뉴스·외부 정보가 필요하면 web_search\n"
         "- 일반 대화나 기본 지식이면 general_chat"
     )
@@ -152,40 +137,32 @@ def _route_with_llm(candidates: list[RouteCandidate], query: str) -> tuple[str, 
         )
         for part in response.candidates[0].content.parts:
             if part.function_call:
-                fn = part.function_call
-                target_ids = list(fn.args.get("target_ids", [])) if fn.name == "rag_search" else []
-                return fn.name, target_ids
+                return part.function_call.name
     except Exception as e:
         logger.error("LLM 라우팅 실패, general_chat으로 fallback: %s", e)
 
-    return "general_chat", []
+    return "general_chat"
 
 
 def _execute_rag(
     candidates: list[RouteCandidate],
-    selected_ids: list[str],
     query: str,
     top_k: int,
 ) -> tuple[str, list[dict]]:
-    """선택된 target_ids 기반으로 Milvus RAG 검색을 실행한다."""
-    candidate_map = {c.target_id: c for c in candidates}
+    """OpenSearch가 선별한 file 후보를 folder별로 묶어 Milvus RAG 검색을 실행한다."""
+    folder_file_map: dict[int, list[int]] = defaultdict(list)
+    for c in candidates:
+        if c.target_type == "file" and c.folder_id is not None:
+            try:
+                file_id = int(c.target_id.replace("file_", ""))
+                folder_file_map[c.folder_id].append(file_id)
+            except ValueError:
+                logger.warning("file_id 파싱 실패: target_id=%s", c.target_id)
 
-    folder_ids = list({
-        candidate_map[tid].folder_id
-        for tid in selected_ids
-        if tid in candidate_map and candidate_map[tid].folder_id is not None
-    })
-
-    if not folder_ids:
-        folder_ids = list({
-            c.folder_id for c in candidates
-            if c.target_type == "file" and c.folder_id is not None
-        })
-
-    if not folder_ids:
+    if not folder_file_map:
         return "", []
 
-    results = similarity_search(query=query, top_k=top_k, folder_ids=folder_ids)
+    results = similarity_search_by_files(query=query, top_k=top_k, folder_file_map=dict(folder_file_map))
     chunks, sources, seen = [], [], set()
     for r in results:
         chunks.append(f"[{r.file_name}]\n{r.chunk_text}")
@@ -253,9 +230,9 @@ def stream_response(
 
     yield f"data: {json.dumps({'type': 'routing', 'targets': [{'name': c.name, 'type': c.target_type, 'score': round(c.score, 4)} for c in candidates]}, ensure_ascii=False)}\n\n"
 
-    # 2. LLM 라우팅 결정
-    tool_name, selected_ids = _route_with_llm(candidates, query)
-    yield f"data: {json.dumps({'type': 'llm_decision', 'tool': tool_name, 'selected_ids': selected_ids}, ensure_ascii=False)}\n\n"
+    # 2. LLM 라우팅 결정 (도구 선택만, 파일 선택은 OpenSearch 결과 직접 사용)
+    tool_name = _route_with_llm(candidates, query)
+    yield f"data: {json.dumps({'type': 'llm_decision', 'tool': tool_name}, ensure_ascii=False)}\n\n"
 
     # 3. Tool 실행
     if tool_name == "list_capabilities":
@@ -265,7 +242,7 @@ def stream_response(
 
     rag_context, sources, source_type = "", [], ""
     if tool_name == "rag_search":
-        rag_context, sources = _execute_rag(candidates, selected_ids, query, top_k)
+        rag_context, sources = _execute_rag(candidates, query, top_k)
         source_type = "file"
 
     # 4. 관련 대화 이력 필터링 후 Gemini 포맷 변환
