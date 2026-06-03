@@ -10,7 +10,7 @@ from google.genai import types
 from app.application.routing_service import RouteCandidate, find_candidates
 from app.application.search_service import similarity_search_by_files
 from app.infrastructure.embedder import embedder
-from app.infrastructure.opensearch_adapter import _TOOL_DEFINITIONS
+from app.infrastructure.opensearch_adapter import get_all_tools
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -52,13 +52,14 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def _filter_relevant_history(
     conversation_history: list[dict],
     query: str,
+    current_tool: str = "general_chat",
     top_k: int = 3,
-    always_recent: int = 1,
+    min_score: float = 0.25,
 ) -> list[dict]:
     """현재 질문과 관련된 대화 이력만 선별한다.
 
-    - always_recent 쌍(user+bot)은 직전 맥락으로 무조건 포함
-    - 나머지는 임베딩 유사도 top_k 쌍만 포함
+    - tool 타입이 다른 이력(RAG ↔ general_chat)은 임계값을 높여 오염 방지
+    - 임베딩 유사도 top_k 쌍 중 min_score 이상인 쌍만 포함
     """
     if not conversation_history:
         return []
@@ -72,40 +73,42 @@ def _filter_relevant_history(
         pairs.append((user_turn, bot_turn))
         i += 2
 
-    if len(pairs) <= always_recent:
-        return conversation_history
+    if not pairs:
+        return []
 
-    recent_pairs = pairs[-always_recent:]
-    older_pairs = pairs[:-always_recent]
-
-    if not older_pairs:
-        return conversation_history
-
-    # 오래된 쌍을 임베딩 유사도로 필터링
+    # 임베딩 유사도로 모든 쌍 점수화
     query_emb = np.array(embedder.encode_one(query))
     scored: list[tuple[float, int]] = []
-    for idx, (user_turn, bot_turn) in enumerate(older_pairs):
+    for idx, (user_turn, bot_turn) in enumerate(pairs):
         text = user_turn.get("content", "")
         if bot_turn:
             text += " " + bot_turn.get("content", "")[:200]
         pair_emb = np.array(embedder.encode_one(text[:500]))
         score = _cosine_similarity(query_emb, pair_emb)
-        scored.append((score, idx))
+
+        # tool 타입이 다른 이력은 유사도 임계값을 높임 (오염 방지)
+        bot_tool = (bot_turn or {}).get("tool", "general_chat")
+        effective_min = min_score if bot_tool == current_tool else min_score + 0.25
+
+        scored.append((score, idx, effective_min))
 
     scored.sort(reverse=True)
-    relevant_indices = {idx for _, idx in scored[:top_k]}
 
-    # 원래 순서 유지 후 평탄화
-    selected = [p for idx, p in enumerate(older_pairs) if idx in relevant_indices]
+    relevant_indices = set()
+    for score, idx, effective_min in scored[:top_k]:
+        if score >= effective_min:
+            relevant_indices.add(idx)
+
+    selected = [p for idx, p in enumerate(pairs) if idx in relevant_indices]
     result: list[dict] = []
-    for user_turn, bot_turn in selected + recent_pairs:
+    for user_turn, bot_turn in selected:
         result.append(user_turn)
         if bot_turn:
             result.append(bot_turn)
 
     logger.info(
-        "히스토리 필터링: 전체=%d쌍 → 선택=%d쌍",
-        len(pairs), len(selected) + len(recent_pairs),
+        "히스토리 필터링: 전체=%d쌍 → 선택=%d쌍 (current_tool=%s)",
+        len(pairs), len(selected), current_tool,
     )
     return result
 
@@ -119,9 +122,11 @@ def _route_with_llm(candidates: list[RouteCandidate], query: str) -> str:
         f"사용자 질문: {query}\n\n"
         f"{candidate_section}"
         "질문에 가장 적합한 tool을 선택하세요.\n"
-        "- 문서·파일 관련 질문이면 rag_search\n"
+        "- 인사, 감사, 잡담 등 단순 대화이면 반드시 general_chat\n"
+        "- 문서·파일 내용에 대한 질문이면 rag_search\n"
         "- 최신 정보·뉴스·외부 정보가 필요하면 web_search\n"
-        "- 일반 대화나 기본 지식이면 general_chat"
+        "- 일반 지식 질문이면 general_chat\n"
+        "주의: 문서 후보가 존재하더라도 질문이 인사말이거나 문서와 무관하면 general_chat을 선택하세요."
     )
 
     try:
@@ -189,9 +194,10 @@ def _extract_web_sources(chunk) -> list[dict]:
 
 
 def _tool_info() -> str:
+    tools = get_all_tools()
     lines = "\n".join(
         f"- {t['name']}: {t['description']}"
-        for t in _TOOL_DEFINITIONS
+        for t in tools
         if not t.get("hidden")
     )
     return f"사용 가능한 기능:\n{lines}"
@@ -246,7 +252,7 @@ def stream_response(
         source_type = "file"
 
     # 4. 관련 대화 이력 필터링 후 Gemini 포맷 변환
-    filtered_history = _filter_relevant_history(conversation_history, query)
+    filtered_history = _filter_relevant_history(conversation_history, query, current_tool=tool_name)
     contents = []
     for h in filtered_history:
         role = "model" if h.get("role") == "assistant" else h.get("role", "user")

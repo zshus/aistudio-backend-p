@@ -212,50 +212,26 @@ def get_keywords(target_id: str) -> list[str]:
         return []
 
 
-_TOOL_DEFINITIONS = [
-    {
-        "target_id":   "general_chat",
-        "target_type": "tool",
-        "name":        "일반 채팅",
-        "description": "문서 검색 없이 일반 지식으로 답변",
-        "keywords":    ["안녕", "인사", "대화", "설명", "도움", "질문", "답변", "알려줘", "뭐야", "어떻게", "왜", "무엇", "기능", "할 수 있어", "뭘 할", "도움말", "사용법", "소개", "능력"],
-    },
-    {
-        "target_id":   "rag_search",
-        "target_type": "tool",
-        "name":        "문서 검색",
-        "description": "업로드된 파일·폴더 내용을 검색하여 답변",
-        "keywords":    ["문서", "파일", "자료", "내용", "보고서", "매뉴얼", "계약서", "찾아줘", "검색", "있어", "업로드"],
-    },
-    {
-        "target_id":   "web_search",
-        "target_type": "tool",
-        "name":        "웹 검색",
-        "description": "인터넷에서 최신 정보를 검색하여 답변",
-        "keywords":    ["날씨", "뉴스", "최신", "실시간", "지금", "오늘", "현재", "주가", "환율", "인터넷", "최근"],
-    },
-    {
-        "target_id":   "list_capabilities",
-        "target_type": "tool",
-        "name":        "기능 목록",
-        "description": "시스템이 제공하는 기능 목록을 안내",
-        "keywords":    ["기능", "할 수 있어", "뭘 할", "도움말", "사용법", "소개", "능력", "어떤 기능", "무슨 기능", "뭐 할 수"],
-        "hidden":      True,
-    },
-]
-
-
-def seed_tools(embedder) -> int:
-    """general_chat / rag_search / web_search tool을 OpenSearch에 upsert한다."""
-    for tool in _TOOL_DEFINITIONS:
-        embedding = embedder.encode_one(" ".join(tool["keywords"]))
-        upsert(
-            target_id=tool["target_id"],
-            target_type=tool["target_type"],
-            name=tool["name"],
-            keywords=tool["keywords"],
-            embedding=embedding,
-            description=tool["description"],
+def get_all_tools() -> list[dict]:
+    try:
+        client = _client()
+        resp = client.search(
+            index=INDEX,
+            body={
+                "size": 100,
+                "query": {"bool": {"filter": [{"term": {"target_type": "tool"}}, {"term": {"enabled": True}}]}},
+            },
         )
-    logger.info("tool seed 완료: %d개", len(_TOOL_DEFINITIONS))
-    return len(_TOOL_DEFINITIONS)
+        return [
+            {
+                "name": hit["_source"]["name"],
+                "description": hit["_source"].get("description", ""),
+                "hidden": False,
+            }
+            for hit in resp["hits"]["hits"]
+        ]
+    except Exception as e:
+        logger.error("tool 목록 조회 실패: %s", e)
+        return []
+
+

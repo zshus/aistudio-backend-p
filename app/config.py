@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     opensearch_host: str = "opensearch"
     opensearch_port: int = 9200
     opensearch_keyword_index: str = "routing_keywords"
-    routing_score_threshold: float = 0.4
+    routing_score_threshold: float = 0.55
 
     google_api_key: str = ""
     llm_model: str = "gemini-2.5-flash"

@@ -46,7 +46,7 @@ def _tfidf_keywords(chunks: list[str], n: int) -> list[str]:
         return []
 
 
-def extract_and_save(file_id: int, folder_id: int, file_name: str) -> list[str]:
+def extract_and_save(file_id: int, folder_id: int, file_name: str, enabled: bool = True) -> list[str]:
     chunks_data = milvus_adapter.query_chunks_by_file_id(file_id, folder_id)
     if not chunks_data:
         logger.warning("키워드 추출 대상 chunk 없음: file_id=%s, folder_id=%s", file_id, folder_id)
@@ -71,12 +71,13 @@ def extract_and_save(file_id: int, folder_id: int, file_name: str) -> list[str]:
         keywords=keywords,
         embedding=embedding,
         folder_id=folder_id,
+        enabled=enabled,
     )
     logger.info("키워드 사전 저장 완료: file_id=%s, keywords=%s", file_id, keywords)
     return keywords
 
 
-def save_keywords(file_id: int, folder_id: int, file_name: str, keywords: list[str]) -> list[str]:
+def save_keywords(file_id: int, folder_id: int, file_name: str, keywords: list[str], enabled: bool = True) -> list[str]:
     if not keywords:
         return []
     keyword_text = " ".join(keywords)
@@ -88,6 +89,7 @@ def save_keywords(file_id: int, folder_id: int, file_name: str, keywords: list[s
         keywords=keywords,
         embedding=embedding,
         folder_id=folder_id,
+        enabled=enabled,
     )
     logger.info("키워드 수동 저장 완료: file_id=%s, keywords=%s", file_id, keywords)
     return keywords

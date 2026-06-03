@@ -19,7 +19,6 @@ from app.infrastructure.embedder import embedder
 async def lifespan(app: FastAPI):
     milvus_adapter.connect()
     opensearch_adapter.ensure_index()
-    opensearch_adapter.seed_tools(embedder)
     yield
 
 

@@ -11,6 +11,7 @@ class KeywordExtractRequest(BaseModel):
     file_id: int
     folder_id: int
     file_name: str = ""
+    enabled: bool = True
 
 
 class KeywordExtractResponse(BaseModel):
@@ -31,6 +32,7 @@ def extract_keywords(req: KeywordExtractRequest):
             file_id=req.file_id,
             folder_id=req.folder_id,
             file_name=req.file_name,
+            enabled=req.enabled,
         )
         return KeywordExtractResponse(file_id=req.file_id, keywords=keywords)
     except Exception as e:
@@ -43,6 +45,7 @@ class KeywordSaveRequest(BaseModel):
     folder_id: int
     file_name: str = ""
     keywords: list[str]
+    enabled: bool = True
 
 
 @router.post("/save", response_model=KeywordExtractResponse)
@@ -54,6 +57,7 @@ def save_keywords(req: KeywordSaveRequest):
             folder_id=req.folder_id,
             file_name=req.file_name,
             keywords=req.keywords,
+            enabled=req.enabled,
         )
         return KeywordExtractResponse(file_id=req.file_id, keywords=keywords)
     except Exception as e:
