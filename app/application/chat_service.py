@@ -49,22 +49,60 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
+def _rewrite_query(query: str, conversation_history: list[dict]) -> str:
+    """직전 대화 맥락을 반영해 OpenSearch 검색용 독립형 쿼리로 재작성한다.
+    주제 전환이 감지되거나 불확실하면 원본 쿼리를 그대로 반환한다."""
+    if not conversation_history:
+        return query
+
+    recent = conversation_history[-6:]  # 최대 3쌍
+    context_lines = []
+    for h in recent:
+        role = "사용자" if h.get("role") == "user" else "AI"
+        context_lines.append(f"{role}: {h.get('content', '')[:150]}")
+    context = "\n".join(context_lines)
+
+    prompt = (
+        f"직전 대화:\n{context}\n\n"
+        f"현재 질문: {query}\n\n"
+        "규칙:\n"
+        "1. 현재 질문이 직전 대화의 연속(지시대명사·생략·후속 질문)이면 맥락을 포함한 독립형 검색 쿼리로 재작성\n"
+        "2. 완전히 다른 주제이거나 '이 파일', '그거 말고' 같은 명시적 전환이면 현재 질문을 그대로 반환\n"
+        "3. 판단이 불확실하면 현재 질문을 그대로 반환\n"
+        "결과만 한 줄로 출력하세요."
+    )
+
+    try:
+        response = _get_client().models.generate_content(
+            model=settings.llm_model,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config=types.GenerateContentConfig(max_output_tokens=80),
+        )
+        rewritten = (response.text or "").strip()
+        if rewritten and rewritten != query:
+            logger.info("쿼리 재작성: '%s' → '%s'", query, rewritten)
+        return rewritten or query
+    except Exception as e:
+        logger.warning("쿼리 재작성 실패, 원본 사용: %s", e)
+        return query
+
+
 def _filter_relevant_history(
     conversation_history: list[dict],
     query: str,
     current_tool: str = "general_chat",
-    top_k: int = 3,
-    min_score: float = 0.25,
+    same_tool_recent: int = 5,
+    cross_tool_top_k: int = 2,
+    cross_tool_min_score: float = 0.5,
 ) -> list[dict]:
-    """현재 질문과 관련된 대화 이력만 선별한다.
+    """대화 이력을 선별한다.
 
-    - tool 타입이 다른 이력(RAG ↔ general_chat)은 임계값을 높여 오염 방지
-    - 임베딩 유사도 top_k 쌍 중 min_score 이상인 쌍만 포함
+    - same-tool: 최신 N쌍을 유사도 무관하게 보장 (대화 연속성 유지)
+    - cross-tool: 유사도 상위 K쌍만 엄격한 임계값으로 허용
     """
     if not conversation_history:
         return []
 
-    # (user, bot) 쌍으로 묶기
     pairs: list[tuple[dict, dict | None]] = []
     i = 0
     while i < len(conversation_history):
@@ -76,30 +114,34 @@ def _filter_relevant_history(
     if not pairs:
         return []
 
-    # 임베딩 유사도로 모든 쌍 점수화
-    query_emb = np.array(embedder.encode_one(query))
-    scored: list[tuple[float, int]] = []
-    for idx, (user_turn, bot_turn) in enumerate(pairs):
-        text = user_turn.get("content", "")
-        if bot_turn:
-            text += " " + bot_turn.get("content", "")[:200]
-        pair_emb = np.array(embedder.encode_one(text[:500]))
-        score = _cosine_similarity(query_emb, pair_emb)
+    # same-tool: 최신순 same_tool_recent쌍 보장
+    same_tool_indexed = [
+        idx for idx, (_, bot_turn) in enumerate(pairs)
+        if (bot_turn or {}).get("tool", "general_chat") == current_tool
+    ]
+    selected_indices = set(same_tool_indexed[-same_tool_recent:])
 
-        # tool 타입이 다른 이력은 유사도 임계값을 높임 (오염 방지)
-        bot_tool = (bot_turn or {}).get("tool", "general_chat")
-        effective_min = min_score if bot_tool == current_tool else min_score + 0.25
+    # cross-tool: 유사도 상위 cross_tool_top_k쌍 (엄격한 임계값)
+    cross_tool_indexed = [idx for idx in range(len(pairs)) if idx not in selected_indices]
+    if cross_tool_indexed:
+        query_emb = np.array(embedder.encode_one(query))
+        scored_cross: list[tuple[float, int]] = []
+        for idx in cross_tool_indexed:
+            user_turn, bot_turn = pairs[idx]
+            text = user_turn.get("content", "")
+            if bot_turn:
+                text += " " + bot_turn.get("content", "")[:200]
+            pair_emb = np.array(embedder.encode_one(text[:500]))
+            score = _cosine_similarity(query_emb, pair_emb)
+            scored_cross.append((score, idx))
 
-        scored.append((score, idx, effective_min))
+        scored_cross.sort(reverse=True)
+        for score, idx in scored_cross[:cross_tool_top_k]:
+            if score >= cross_tool_min_score:
+                selected_indices.add(idx)
 
-    scored.sort(reverse=True)
-
-    relevant_indices = set()
-    for score, idx, effective_min in scored[:top_k]:
-        if score >= effective_min:
-            relevant_indices.add(idx)
-
-    selected = [p for idx, p in enumerate(pairs) if idx in relevant_indices]
+    # 원래 시간순 유지
+    selected = [pairs[idx] for idx in sorted(selected_indices)]
     result: list[dict] = []
     for user_turn, bot_turn in selected:
         result.append(user_turn)
@@ -182,7 +224,7 @@ def _extract_web_sources(chunk) -> list[dict]:
     """스트리밍 마지막 청크에서 Google Search grounding 출처를 추출한다."""
     try:
         gm = chunk.candidates[0].grounding_metadata
-        if not gm or not hasattr(gm, "grounding_chunks"):
+        if not gm or not getattr(gm, "grounding_chunks", None):
             return []
         sources = []
         for gc in gm.grounding_chunks:
@@ -225,8 +267,11 @@ def stream_response(
     folder_ids: list[int] | None = None,
     top_k: int = 5,
 ) -> Generator[str, None, None]:
-    # 1. OpenSearch 라우팅 후보 탐색
-    candidates = find_candidates(query)
+    # 1. 쿼리 재작성: 대화 맥락 반영 (OpenSearch·RAG·히스토리 필터링에 사용)
+    search_query = _rewrite_query(query, conversation_history)
+
+    # 2. OpenSearch 라우팅 후보 탐색 (재작성 쿼리 사용)
+    candidates = find_candidates(search_query)
     if folder_ids:
         folder_id_set = set(folder_ids)
         candidates = [
@@ -236,11 +281,11 @@ def stream_response(
 
     yield f"data: {json.dumps({'type': 'routing', 'targets': [{'name': c.name, 'type': c.target_type, 'score': round(c.score, 4)} for c in candidates]}, ensure_ascii=False)}\n\n"
 
-    # 2. LLM 라우팅 결정 (도구 선택만, 파일 선택은 OpenSearch 결과 직접 사용)
-    tool_name = _route_with_llm(candidates, query)
+    # 3. LLM 라우팅 결정 (재작성 쿼리 사용)
+    tool_name = _route_with_llm(candidates, search_query)
     yield f"data: {json.dumps({'type': 'llm_decision', 'tool': tool_name}, ensure_ascii=False)}\n\n"
 
-    # 3. Tool 실행
+    # 4. Tool 실행
     if tool_name == "list_capabilities":
         yield f"data: {json.dumps({'type': 'token', 'content': _tool_info()}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'done', 'sources': [], 'source_type': ''}, ensure_ascii=False)}\n\n"
@@ -248,11 +293,11 @@ def stream_response(
 
     rag_context, sources, source_type = "", [], ""
     if tool_name == "rag_search":
-        rag_context, sources = _execute_rag(candidates, query, top_k)
+        rag_context, sources = _execute_rag(candidates, search_query, top_k)
         source_type = "file"
 
-    # 4. 관련 대화 이력 필터링 후 Gemini 포맷 변환
-    filtered_history = _filter_relevant_history(conversation_history, query, current_tool=tool_name)
+    # 5. 관련 대화 이력 필터링 (재작성 쿼리 기준 유사도 산정)
+    filtered_history = _filter_relevant_history(conversation_history, search_query, current_tool=tool_name)
     contents = []
     for h in filtered_history:
         role = "model" if h.get("role") == "assistant" else h.get("role", "user")
@@ -262,7 +307,7 @@ def stream_response(
             )
     contents.append(types.Content(role="user", parts=[types.Part(text=query)]))
 
-    # 5. Gemini 스트리밍 답변 (web_search는 Google Search Grounding 활성화)
+    # 6. Gemini 스트리밍 답변 (web_search는 Google Search Grounding 활성화)
     if tool_name == "web_search":
         gen_config = types.GenerateContentConfig(
             system_instruction=_build_system_prompt(tool_name, ""),
@@ -295,5 +340,5 @@ def stream_response(
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
         return
 
-    # 6. 완료
+    # 7. 완료
     yield f"data: {json.dumps({'type': 'done', 'sources': sources, 'source_type': source_type}, ensure_ascii=False)}\n\n"
